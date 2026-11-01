@@ -90,6 +90,12 @@ from typing import Callable, Optional, Sequence
 from src.br_data.scheduling import daily_cron_from_env as _br_data_daily_cron
 from src.br_data.scheduling import sync_job_enabled as _br_data_sync_enabled
 from src.memory.consolidation import consolidation_enabled as _memory_consolidation_enabled
+from src.scheduling.paper_manifest_scheduling import (
+    daily_cron_from_env as _paper_manifest_daily_cron,
+)
+from src.scheduling.paper_manifest_scheduling import (
+    paper_manifest_job_enabled as _paper_manifest_enabled,
+)
 from src.scheduled_research.models import (
     JobStatus,
     ScheduledResearchJob,
@@ -270,6 +276,18 @@ _SYSTEM_JOB_SPECS: tuple[SystemJobSpec, ...] = (
         internal_callable="br_data.run_sync",
         title="Brazilian dataset sync",
         enabled_predicate=_br_data_sync_enabled,
+    ),
+    # Daily manifest-driven paper-trading pass on the Alpaca paper sandbox.
+    # The cron derives from VIBE_PAPER_MANIFEST_TIME (UTC "HH:MM") lazily at
+    # ensure time; WHICH manifests trade is VIBE_PAPER_MANIFEST_IDS, read
+    # per-fire by the runnable (not at seed time).
+    SystemJobSpec(
+        id="system:paper-manifest-run",
+        schedule_fn=_paper_manifest_daily_cron,
+        timezone="UTC",
+        internal_callable="paper_trade.manifest_run",
+        title="Manifest paper trading",
+        enabled_predicate=_paper_manifest_enabled,
     ),
 )
 

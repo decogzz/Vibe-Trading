@@ -275,6 +275,27 @@ class DataConfig(_EnvBase):
         default=False, alias="VIBE_BR_SYNC_ENABLED",
         description="Enable the daily br-data sync system job",
     )
+    # Manifest-driven Alpaca paper trading (system:paper-manifest-run job).
+    # VIBE_PAPER_MANIFEST_IDS selects which saved strategy manifests the
+    # daily pass trades (comma-separated manifest ids; empty disables).
+    # VIBE_PAPER_MANIFEST_TIME drives the FIRST seed's cron slot only — a
+    # valid edited schedule on the seeded row is trusted afterwards
+    # (system_jobs local-trust boundary).
+    vibe_paper_manifest_ids: str = Field(
+        alias="VIBE_PAPER_MANIFEST_IDS", default="",
+        description="Comma-separated manifest ids for the daily paper pass",
+    )
+    vibe_paper_manifest_time: str = Field(
+        alias="VIBE_PAPER_MANIFEST_TIME", default="21:45",
+        description="UTC HH:MM cron slot for the first paper-pass seed",
+    )
+    # Opt-in gate for the protected daily paper-pass system job. Deliberately
+    # not part of any preset: enabling the scheduler never silently seeds a
+    # job that places orders on the paper account.
+    vibe_paper_manifest_enabled: EnvBool = Field(
+        default=False, alias="VIBE_PAPER_MANIFEST_ENABLED",
+        description="Enable the daily manifest paper-trading system job",
+    )
     vibe_trading_data_cache: EnvBool = Field(alias="VIBE_TRADING_DATA_CACHE", default=False)
     vibe_trading_data_cache_root: str = Field(alias="VIBE_TRADING_DATA_CACHE_ROOT", default="")
     aliyun_iqs_api_key: str = Field(alias="ALIYUN_IQS_API_KEY", default="")

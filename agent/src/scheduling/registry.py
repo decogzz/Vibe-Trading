@@ -193,6 +193,56 @@ def _paper_trade_run_pass() -> None:
     run_paper_pass()
 
 
+def _paper_manifest_run_pass() -> None:
+    """Run one manifest-driven paper pass per configured manifest id.
+
+    Backs the ``paper_trade.manifest_run`` key: the
+    ``system:paper-manifest-run`` job's runnable. Manifest ids come from
+    ``VIBE_PAPER_MANIFEST_IDS`` read per-fire (see
+    :mod:`src.scheduling.paper_manifest_scheduling`), so adding an id to the
+    env takes effect at the next fire without re-seeding. Each pass is
+    :func:`src.tools.paper_manifest_run.run_manifest_paper_pass` — drift
+    fail-closed, reconciliation sizing, profile fixed to
+    ``alpaca-paper-trade``. Per-manifest failures (drifted manifest, broker
+    error) become ONE exception naming the failed ids, so the executor's
+    retry budget handles them; an empty id list is a recorded no-op.
+    """
+    from src.scheduling.paper_manifest_scheduling import manifest_ids_from_env
+    from src.tools.paper_manifest_run import run_manifest_paper_pass
+
+    ids = manifest_ids_from_env()
+    if not ids:
+        # Recorded no-op, not an error: the retry budget is for failures.
+        import json
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        record = {
+            "fired_at": datetime.now(timezone.utc).isoformat(),
+            "profile": "alpaca-paper-trade",
+            "note": "VIBE_PAPER_MANIFEST_IDS empty — no manifests to trade",
+        }
+        try:
+            log_path = Path.home() / ".vibe-trading" / "paper_pass_log.jsonl"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            pass
+        return
+
+    failed: list[str] = []
+    for manifest_id in ids:
+        try:
+            run_manifest_paper_pass(manifest_id)
+        except Exception:  # noqa: BLE001 - one manifest must not abort the pass
+            failed.append(manifest_id)
+    if failed:
+        raise RuntimeError(
+            f"manifest paper pass failed for: {', '.join(failed)}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Production allowlist — the ONLY name→callable surface (module docstring).
 #
@@ -206,4 +256,5 @@ _INTERNAL_CALLABLES: dict[str, InternalRunnable] = {
     "memory.consolidate": _memory_consolidate,
     "br_data.run_sync": _br_data_run_sync,
     "paper_trade.run": _paper_trade_run_pass,
+    "paper_trade.manifest_run": _paper_manifest_run_pass,
 }
