@@ -283,11 +283,20 @@ class DataConfig(_EnvBase):
     # (system_jobs local-trust boundary).
     vibe_paper_manifest_ids: str = Field(
         alias="VIBE_PAPER_MANIFEST_IDS", default="",
-        description="Comma-separated manifest ids for the daily paper pass",
+        description="Comma-separated manifest ids for the paper pass",
     )
     vibe_paper_manifest_time: str = Field(
         alias="VIBE_PAPER_MANIFEST_TIME", default="21:45",
         description="UTC HH:MM cron slot for the first paper-pass seed",
+    )
+    # Cadence: how often (hours) the paper pass fires. Crypto trades 24/7
+    # (gtc orders), so the default fires every 4 hours, ALL days; 24 keeps
+    # the legacy once-daily cadence. Repeated passes are made safe by the
+    # pass's open-order guard (a pending order is never re-sized/duplicated).
+    vibe_paper_manifest_every_hours: int = Field(
+        alias="VIBE_PAPER_MANIFEST_EVERY_HOURS", default=4,
+        ge=1, le=24,
+        description="Paper-pass cadence in hours (24 = once daily)",
     )
     # Opt-in gate for the protected daily paper-pass system job. Deliberately
     # not part of any preset: enabling the scheduler never silently seeds a

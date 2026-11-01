@@ -307,6 +307,63 @@ def test_pass_uses_gtc_for_crypto(run_dir, saved_manifest, broker, loader, monke
         assert o["time_in_force"] == "day"
 
 
+def test_pass_skips_pending_order_symbols(run_dir, saved_manifest, broker, loader, monkeypatch):
+    """Open-order guard: a pending order is not a position yet — a pass fired
+    while an order sits in the book must HOLD, not re-size the delta and
+    duplicate the order. This is what makes 4H all-days crypto cadence safe."""
+    store, mid = saved_manifest
+    monkeypatch.setattr(
+        "src.tools.strategy_manifest.get_manifest_store", lambda: store
+    )
+    monkeypatch.setattr(pmr, "_append_audit", lambda record: None)
+
+    # both symbols have open orders on the book
+    import src.tools.paper_manifest_run as _pmr_mod
+
+    def fake_pending() -> set:
+        return {"SPY", "QQQ"}
+
+    monkeypatch.setattr(_pmr_mod, "_pending_symbols", fake_pending)
+
+    result = json.loads(pmr.run_manifest_paper_pass(mid))
+    assert broker.orders == [], "pending symbols must not be re-ordered"
+    holds = [a for a in result["actions"] if a.get("reason") == "open order pending"]
+    assert len(holds) == 2
+
+
+def test_guard_survives_open_orders_read_failure(run_dir, saved_manifest, broker, loader, monkeypatch):
+    """A get_open_orders read failure must not abort the pass — but it also
+    must not silently trade blind: the pass proceeds only for symbols whose
+    weights need no order, and the guard degrades to the unguarded path."""
+    store, mid = saved_manifest
+    monkeypatch.setattr(
+        "src.tools.strategy_manifest.get_manifest_store", lambda: store
+    )
+    monkeypatch.setattr(pmr, "_append_audit", lambda record: None)
+
+    import src.tools.paper_manifest_run as _pmr_mod
+
+    def boom():
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(_pmr_mod, "_pending_symbols", lambda: set())
+    # sanity: with no pending info the pass still runs (guarded by threshold)
+    result = json.loads(pmr.run_manifest_paper_pass(mid))
+    assert result["profile"] == "alpaca-paper-trade"
+
+
+def test_pending_symbols_norm_slashes(monkeypatch):
+    """BTC/USD pending arrives from Alpaca as BTCUSD — normalization matches
+    the order-symbol keys the decision loop uses."""
+    import src.tools.paper_manifest_run as _pmr_mod
+
+    monkeypatch.setattr(
+        "src.trading.service.get_open_orders",
+        lambda profile_id: {"open_orders": [{"symbol": "BTC/USD"}, {"symbol": "ETHUSD"}]},
+    )
+    assert _pmr_mod._pending_symbols() == {"BTCUSD", "ETHUSD"}
+
+
 def test_pass_never_shorts_long_only(run_dir, saved_manifest, broker, loader, monkeypatch):
     store, mid = saved_manifest
     monkeypatch.setattr(

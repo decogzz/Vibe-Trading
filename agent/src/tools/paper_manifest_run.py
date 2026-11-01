@@ -197,6 +197,28 @@ def _held_map(positions_reply: dict) -> dict[str, float]:
     return held
 
 
+def _pending_symbols() -> set[str]:
+    """Normalized symbols with an open order on the paper account.
+
+    A pending order is not a position yet: without this guard a pass fired
+    while an order sits in the book would size its delta against position=0
+    and place a duplicate. Mirrors src.scheduling.paper_run's guard.
+    """
+    from src.trading.service import get_open_orders
+
+    try:
+        reply = get_open_orders(PROFILE_ID)
+    except Exception:  # noqa: BLE001 - a read failure must not abort the pass
+        return set()
+    pending: set[str] = set()
+    for row in reply.get("open_orders") or []:
+        if isinstance(row, dict):
+            symbol = _norm(row.get("symbol"))
+            if symbol:
+                pending.add(symbol)
+    return pending
+
+
 def _latest_weight(weight: Any) -> float | None:
     """Extract a scalar latest target weight from an engine output value."""
     try:
@@ -279,6 +301,8 @@ def run_manifest_paper_pass(manifest_id: str) -> str:
 
     weights = engine.generate(data_map) or {}
 
+    pending = _pending_symbols()
+
     actions: list[dict] = []
     for code, weight_value in weights.items():
         order_symbol, _ = order_symbols.get(code, _alpaca_order_symbol(code))
@@ -310,6 +334,14 @@ def run_manifest_paper_pass(manifest_id: str) -> str:
             "target_notional": target_notional,
             "held_qty": held_qty,
         }
+        # Open-order guard: a pending order is not a position yet. Without
+        # this, a pass fired while an order sits in the book re-sizes the
+        # delta against position=0 and duplicates the order. Crypto runs all
+        # days (gtc) so this guard, not the market calendar, is what keeps
+        # repeated passes safe.
+        if key in pending:
+            actions.append({**entry, "action": "hold", "reason": "open order pending"})
+            continue
         if abs(delta_notional) < MIN_DELTA_NOTIONAL_USD:
             actions.append({**entry, "action": "hold", "reason": "within threshold"})
             continue

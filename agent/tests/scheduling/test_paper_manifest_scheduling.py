@@ -105,7 +105,57 @@ def test_enabled_spec_seeds_the_row(tmp_path: Path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 def test_daily_cron_default_slot() -> None:
+    # default: every 4 hours at :45 (crypto 24/7), anchored 21:45 → 45 1,5,9,13,17,21
+    assert pms.daily_cron_from_env() == "45 1,5,9,13,17,21 * * *"
+
+
+def test_every_24_restores_once_daily(monkeypatch) -> None:
+    class _Cfg:
+        class data:  # noqa: N805
+            vibe_paper_manifest_time = "21:45"
+            vibe_paper_manifest_every_hours = 24
+    monkeypatch.setattr(
+        "src.config.accessor.get_env_config", lambda: _Cfg()
+    )
     assert pms.daily_cron_from_env() == "45 21 * * *"
+
+
+def test_every_hours_anchor_phase(monkeypatch) -> None:
+    class _Cfg:
+        class data:  # noqa: N805
+            vibe_paper_manifest_time = "09:30"
+            vibe_paper_manifest_every_hours = 6
+    monkeypatch.setattr(
+        "src.config.accessor.get_env_config", lambda: _Cfg()
+    )
+    # 9:30 anchor every 6h → 30 3,9,15,21 * * *
+    assert pms.daily_cron_from_env() == "30 3,9,15,21 * * *"
+
+
+def test_every_non_divisor_uses_step_form(monkeypatch) -> None:
+    class _Cfg:
+        class data:  # noqa: N805
+            vibe_paper_manifest_time = "21:45"
+            vibe_paper_manifest_every_hours = 5
+    monkeypatch.setattr(
+        "src.config.accessor.get_env_config", lambda: _Cfg()
+    )
+    assert pms.daily_cron_from_env() == "45 */5 * * *"
+
+
+def test_derived_crons_pass_schedule_validation() -> None:
+    from src.scheduling.triggers import validate_schedule
+
+    for every in (1, 2, 3, 4, 5, 6, 8, 12, 24):
+        class _Cfg:
+            class data:  # noqa: N805
+                vibe_paper_manifest_time = "21:45"
+                vibe_paper_manifest_every_hours = every
+        import pytest  # noqa: F401
+        import unittest.mock as mock  # noqa: F401
+
+        with mock.patch("src.config.accessor.get_env_config", return_value=_Cfg()):
+            validate_schedule(pms.daily_cron_from_env())
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -117,6 +167,7 @@ def test_daily_cron_parses_valid_times(monkeypatch, raw, expected) -> None:
     class _Cfg:
         class data:  # noqa: N805
             vibe_paper_manifest_time = raw
+            vibe_paper_manifest_every_hours = 24
     monkeypatch.setattr(
         "src.config.accessor.get_env_config", lambda: _Cfg()
     )
