@@ -1239,9 +1239,16 @@ def dry_run_manifest_paper_pass(manifest_id: str) -> str:
     leverage = float((manifest.get("risk_policy") or {}).get("leverage", 1.0) or 1.0)
 
     try:
+        import pandas as pd
+
         engine = _load_engine_class(Path(manifest["run_dir"]))()
+        # VT runner contract: data_map values are OHLCV DataFrames, and
+        # generate() weights align to each frame's LAST row (causal).
         weights_raw = engine.generate(
-            {code: _load_rows(code, "1D", 400) for code in codes}
+            {
+                code: pd.DataFrame(_load_rows(code, "1D", 400))
+                for code in codes
+            }
         ) or {}
     except Exception as exc:  # noqa: BLE001
         return _json_error(f"engine/data failure: {exc}")
