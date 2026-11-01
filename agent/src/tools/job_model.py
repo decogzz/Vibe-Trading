@@ -175,9 +175,11 @@ class JobStore:
 
     def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
-            rows = sorted(
-                self._jobs.values(), key=lambda j: j["record"].submitted_at, reverse=True
-            )
+            # dict preserves insertion order == submission order (newest last
+            # submitted is newest); time.time() ties on Windows made sorting
+            # unstable, so reverse the deterministic insertion order instead.
+            rows = list(self._jobs.values())
+            rows.reverse()
             return [self._public(r["record"]) for r in rows[:limit]]
 
     # ── mutation ───────────────────────────────────────────────────────────

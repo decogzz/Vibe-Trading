@@ -101,20 +101,52 @@ def compile_strategy(
     # Warmup estimate: the longest rolling window referenced in the engine
     # source. ``rolling(``, ``window=``, ``.mean(N)``, ``shift(N)`` — the
     # common pandas idioms — are the honest floor; anything fancier should
-    # declare itself in config via ``warmup_bars``.
+    # declare itself in config via ``warmup_bars``. Symbolic window names
+    # (``rolling(SLOW)``) are resolved against simple top-level integer
+    # constant assignments (``SLOW = 50``) before giving up.
     warmup_declared = config.get("warmup_bars")
     warmup_estimated: int | None = None
     if not isinstance(warmup_declared, (int, float)) or warmup_declared <= 0:
-        windows = [
-            int(m)
-            for pattern in (
-                r"rolling\(\s*(\d+)",
-                r"window\s*=\s*(\d+)",
-                r"\.mean\(\s*(\d+)\s*\)",
-                r"\.shift\(\s*(\d+)\s*\)",
-            )
-            for m in re.findall(pattern, engine_src)
-        ]
+        import ast
+
+        int_consts: dict[str, int] = {}
+        try:
+            for node in ast.parse(engine_src).body:
+                if isinstance(node, ast.Assign):
+                    # SLOW = 50  |  FAST, SLOW = 20, 50  |  SLOW: int = 50
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, int):
+                        for target in node.targets:
+                            if isinstance(target, ast.Name):
+                                int_consts[target.id] = node.value.value
+                    elif isinstance(node.value, (ast.Tuple, ast.List)) and all(
+                        isinstance(e, ast.Constant) and isinstance(e.value, int)
+                        for e in node.value.elts
+                    ):
+                        vals = [e.value for e in node.value.elts]
+                        for target in node.targets:
+                            if isinstance(target, ast.Tuple) and len(target.elts) == len(vals):
+                                for t, v in zip(target.elts, vals):
+                                    if isinstance(t, ast.Name):
+                                        int_consts[t.id] = v
+        except SyntaxError:
+            int_consts = {}
+
+        def _resolve_window(token: str) -> int | None:
+            if token.lstrip("-").isdigit():
+                return int(token)
+            return int_consts.get(token)
+
+        windows = []
+        for pattern, group in (
+            (r"rolling\(\s*([A-Za-z_][A-Za-z0-9_]*|\d+)", 1),
+            (r"window\s*=\s*([A-Za-z_][A-Za-z0-9_]*|\d+)", 1),
+            (r"\.mean\(\s*([A-Za-z_][A-Za-z0-9_]*|\d+)\s*\)", 1),
+            (r"\.shift\(\s*([A-Za-z_][A-Za-z0-9_]*|\d+)\s*\)", 1),
+        ):
+            for m in re.findall(pattern, engine_src):
+                resolved = _resolve_window(m)
+                if resolved is not None:
+                    windows.append(resolved)
         warmup_estimated = max(windows) if windows else None
         warmup_declared = None
     else:
