@@ -1134,6 +1134,153 @@ def backtest_from_manifest(manifest_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Manifest-driven paper trading on the Alpaca paper account: the loop
+# compile_strategy → save_strategy_manifest → submit_paper_run(manifest_id).
+# The profile is FIXED to alpaca-paper-trade — the sandbox, never live funds.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+def submit_paper_run(
+    manifest_id: str,
+    idempotency_key: str,
+) -> str:
+    """Run one manifest-driven paper-trading pass on the Alpaca paper account.
+
+    Loads the saved manifest, re-verifies its content hash against the run_dir
+    (a drifted strategy never trades under a stale manifest id), loads the
+    manifest's ``SignalEngine``, fetches daily bars through the repository
+    loader layer, computes target weights via ``generate(data_map)``, and
+    reconciles them against current paper positions — ordering only the
+    delta, with a skip threshold and a hard per-order notional cap.
+
+    Long-only by default (``allow_short`` in the manifest opts into shorts);
+    crypto orders use ``time_in_force="gtc"``. The profile is fixed to
+    ``alpaca-paper-trade`` — this tool can never reach live funds.
+
+    Runs as a bounded async job: returns immediately with a job envelope
+    (``job_id``, ``status``); poll with ``get_job`` / ``wait_for_job``. The
+    completed job's ``result_preview`` holds the full pass record (equity
+    before/after, per-symbol actions, fetch errors), also appended to
+    ``~/.vibe-trading/paper_pass_log.jsonl``.
+
+    Idempotent: re-submitting with the same ``idempotency_key`` returns the
+    original job without starting new work.
+
+    Args:
+        manifest_id: Manifest id from ``save_strategy_manifest``.
+        idempotency_key: Caller-generated unique key for this submission.
+            Retries of the same request MUST reuse the same key.
+    """
+    import os
+
+    from src.tools.job_model import JobError, job_snapshot_envelope
+    from src.tools.paper_manifest_run import run_manifest_paper_pass
+
+    store = _get_job_store()
+    try:
+        snapshot = store.submit(
+            kind="paper_run",
+            idempotency_key=idempotency_key,
+            request={"manifest_id": manifest_id},
+            work=lambda: run_manifest_paper_pass(manifest_id),
+            pid=os.getpid(),
+        )
+    except JobError as exc:
+        return _json_error(str(exc), error_type="validation")
+    return job_snapshot_envelope(snapshot)
+
+
+@mcp.tool
+def dry_run_manifest_paper_pass(manifest_id: str) -> str:
+    """Preview a manifest paper pass without placing any order.
+
+    Same pipeline as ``submit_paper_run`` up to (and including) weight
+    computation, but stops before reconciliation orders: reports the target
+    weights, target notionals at current equity, held quantities, and the
+    deltas that *would* be ordered. No order is placed, nothing is written
+    to the audit log.
+
+    Use this to sanity-check a manifest's live behavior before committing a
+    scheduled ``submit_paper_run``.
+
+    Args:
+        manifest_id: Manifest id from ``save_strategy_manifest``.
+    """
+    import json as _json
+
+    from src.tools.paper_manifest_run import (
+        MAX_NOTIONAL_USD,
+        MIN_DELTA_NOTIONAL_USD,
+        ManifestError,
+        _account_equity,
+        _alpaca_order_symbol,
+        _clip_weight,
+        _held_map,
+        _is_crypto_pair,
+        _latest_weight,
+        _load_engine_class,
+        _load_rows,
+        _norm,
+        _positions_reply,
+        _verified_manifest,
+    )
+
+    try:
+        manifest = _verified_manifest(manifest_id)
+    except (RuntimeError, ManifestError) as exc:
+        return _json_error(str(exc), error_type="not_found")
+
+    config = manifest.get("config") or {}
+    codes = config.get("codes") or []
+    if not codes:
+        return _json_error(f"manifest {manifest_id} has an empty universe")
+    allow_short = bool((manifest.get("risk_policy") or {}).get("allow_short", False))
+    leverage = float((manifest.get("risk_policy") or {}).get("leverage", 1.0) or 1.0)
+
+    try:
+        engine = _load_engine_class(Path(manifest["run_dir"]))()
+        weights_raw = engine.generate(
+            {code: _load_rows(code, "1D", 400) for code in codes}
+        ) or {}
+    except Exception as exc:  # noqa: BLE001
+        return _json_error(f"engine/data failure: {exc}")
+
+    equity = _account_equity()
+    held = _held_map(_positions_reply())
+
+    preview: list[dict] = []
+    for code, weight_value in weights_raw.items():
+        order_symbol, _ = _alpaca_order_symbol(str(code))
+        raw = _latest_weight(weight_value)
+        if raw is None:
+            preview.append({"symbol": code, "order_symbol": order_symbol, "action": "skip",
+                            "reason": "unusable weight"})
+            continue
+        weight = _clip_weight(raw, allow_short, leverage)
+        target_notional = max(min(weight * (equity or 0.0), MAX_NOTIONAL_USD), -MAX_NOTIONAL_USD)
+        preview.append({
+            "symbol": code,
+            "order_symbol": order_symbol,
+            "crypto": _is_crypto_pair(order_symbol),
+            "weight": weight,
+            "target_notional": target_notional,
+            "held_qty": held.get(_norm(order_symbol), 0.0),
+            "would_trade": abs(target_notional) >= MIN_DELTA_NOTIONAL_USD,
+        })
+
+    return _json.dumps({
+        "status": "ok",
+        "manifest_id": manifest_id,
+        "manifest_name": manifest.get("name"),
+        "profile": "alpaca-paper-trade",
+        "equity": equity,
+        "note": "dry run — no orders placed",
+        "preview": preview,
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # VT→QD bridge: compile a Vibe-Trading run directory into a QuantDinger
 # Strategy API V2 source (embeds the SignalEngine verbatim in a V2 shell).
 # ---------------------------------------------------------------------------

@@ -133,7 +133,7 @@ Comprehensive knowledge base covering:
 
 Use `load_skill(name)` to access full methodology docs with code templates.
 
-## Available MCP Tools (84)
+## Available MCP Tools (97)
 
 | Tool | Description | API Key |
 |------|-------------|---------|
@@ -145,6 +145,19 @@ Use `load_skill(name)` to access full methodology docs with code templates.
 | `update_research_goal` | Edit a research goal's objective or summary in place | None |
 | `update_research_goal_status` | Update goal lifecycle status | None |
 | `backtest` | Run vectorized backtest engine | None* |
+| `submit_backtest` | Run a backtest as a bounded async job (idempotent by `idempotency_key`) | None* |
+| `get_job` | Read one job's status snapshot without blocking | None |
+| `list_jobs` | List bounded jobs (newest first) | None |
+| `wait_for_job` | Block until a job reaches a terminal status (bounded timeout) | None |
+| `cancel_job` | Cancel a job; requires explicit `confirm_cancel=true` | None |
+| `compile_strategy` | Compile a run directory (config.json + signal_engine.py) into a content-addressed manifest | None |
+| `save_strategy_manifest` | Persist a compiled manifest under `<runtime_root>/agent/strategy-manifests` | None |
+| `get_strategy_manifest` | Load one saved manifest by id | None |
+| `list_strategy_manifests` | List saved manifests (newest first) | None |
+| `backtest_from_manifest` | Run the backtest engine against a saved manifest's run_dir (proves the manifest is executable) | None* |
+| `submit_paper_run` | Manifest-driven paper-trading pass on the Alpaca paper account, as a bounded idempotent job; profile fixed to `alpaca-paper-trade` (never live) | Alpaca paper keys |
+| `dry_run_manifest_paper_pass` | Preview a manifest paper pass (weights, targets, deltas) without placing any order | Alpaca paper keys |
+| `compile_vt_strategy_for_quantdinger` | Translate a VT run directory into a QuantDinger Strategy API V2 source (AST rewrite, sandbox-compliant) | None |
 | `paper_trade_step` | Deterministic paper-trading matching engine; never places real orders | None* |
 | `factor_analysis` | IC/IR analysis + layered backtest | None* |
 | `alpha_zoo` | Browse bundled alpha metadata and registry health | None |
