@@ -15,6 +15,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 dependencies = [
@@ -30,6 +32,8 @@ dependencies = [
     "h2>=4.4.1",
     "defusedxml>=0.7.1",
     "oauth-cli-kit>=0.1.3",
+    # pandas 3.x breaks industry_loader .loc lookups and journal date
+    # validation (str-dtype / to_datetime changes); stay on 2.x.
     "pandas>=2.0.0,<3.0.0",
     "openpyxl>=3.1.0",
     "python-docx>=1.1.0",

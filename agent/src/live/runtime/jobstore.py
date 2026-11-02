@@ -41,6 +41,29 @@ _RUNTIME_SUBDIR = "runtime"
 #: a future loader can branch instead of mis-parsing an old layout.
 _SCHEMA_VERSION = 1
 
+# Windows rename races (WinError 5/32) between concurrent saves/readers of the
+# same target; retried with backoff exactly like swarm/store.py. POSIX
+# os.replace is atomic and never raises these, so the loop runs once there.
+_TRANSIENT_WINERRORS = (5, 32)
+_REPLACE_ATTEMPTS = 6
+_REPLACE_BACKOFF = (0.025, 0.05, 0.1, 0.2, 0.4)  # seconds; len == attempts - 1
+
+
+def _replace_with_retry(tmp: Path, target: Path) -> None:
+    """``os.replace`` retried on the Windows concurrent-access race."""
+    import time as _time
+
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp, target)
+            return
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in _TRANSIENT_WINERRORS:
+                raise
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            _time.sleep(_REPLACE_BACKOFF[attempt])
+
 
 class CorruptJobStoreError(RuntimeError):
     """Raised when the on-disk store exists but cannot be parsed.
@@ -157,7 +180,7 @@ class JobStore:
                         raise OSError("job store write made no progress")
                     remaining = remaining[written:]
                 os.fsync(handle.fileno())
-            os.replace(tmp, target)
+            _replace_with_retry(tmp, target)
             self._fsync_dir(target.parent)
         finally:
             tmp.unlink(missing_ok=True)

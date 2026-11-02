@@ -314,7 +314,7 @@ def test_kis_token_error_does_not_echo_the_token_response(monkeypatch, tmp_path)
     assert "s3cr3t" not in str(excinfo.value)
 
 
-@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="POSIX file modes")
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "fchmod"), reason="POSIX file modes")
 def test_kis_token_cache_is_owner_only_even_over_an_older_file(monkeypatch, tmp_path) -> None:
     cfg = kis.KISConfig(app_key="k", app_secret="s", account_no="12345678", profile="paper")
     cache = tmp_path / "kis-token-paper.json"
