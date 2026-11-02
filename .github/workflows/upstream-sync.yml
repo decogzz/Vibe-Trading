@@ -1,0 +1,111 @@
+name: Upstream Sync
+
+# Weekly unattended merge of upstream HKUDS/Vibe-Trading main into this
+# private main, opened as a PR so CI (hash locks + full test suite) gates the
+# merge. Manual dispatch supported for on-demand syncs.
+#
+# The repo was detached from GitHub's fork network on 2026-11-02 (public
+# forks cannot be made private); git history is shared with upstream, so a
+# plain merge is the sync mechanism and this workflow replaces the missing
+# "Sync fork" button.
+#
+# Conflict policy (documented for whoever debugs a red run):
+#   - dependency/lock/compose files: OURS wins (local stack is deliberately
+#     ahead: Python 3.14, hash locks, pandas<3 cap, mcp<2)
+#   - application code: upstream wins unless we have local features, which
+#     git keeps automatically on clean merges
+# If the merge conflicts, the run fails WITHOUT pushing and the log shows
+# the conflicted paths; resolve locally, then re-dispatch.
+
+on:
+  schedule:
+    # Mondays 09:17 UTC — off the top of the hour to dodge the runner rush.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream main
+    # Only the default branch owner repo, never on forks of this repo.
+    if: github.repository == 'decogzz/Vibe-Trading'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch upstream and measure drift
+        id: drift
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/HKUDS/Vibe-Trading.git
+          git fetch upstream main
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "Behind upstream by $BEHIND commits."
+          git log --oneline HEAD..upstream/main | head -20 || true
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream into a sync branch
+        if: steps.drift.outputs.up_to_date == 'false'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="sync/upstream-$(date -u +%Y%m%d-%H%M)"
+          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          git checkout -b "$BRANCH"
+          # A merge commit keeps upstream history intact and matches how the
+          # 2026-11-02 manual sync (5a624e3d) landed; --no-edit takes git's
+          # default message which names the merged commit.
+          git merge upstream/main --no-edit
+          echo "Merge clean."
+
+      - name: Push sync branch and open PR
+        if: steps.drift.outputs.up_to_date == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ env.BRANCH }}
+        run: |
+          set -euo pipefail
+          git push origin "$BRANCH"
+          SUBJECT=$(git log --format=%s -1 upstream/main)
+          COUNT=$(git rev-list --count HEAD~1..upstream/main 2>/dev/null || echo "?")
+          gh pr create \
+            --title "chore: sync upstream HKUDS/Vibe-Trading (merge)" \
+            --body "$(cat <<'EOF'
+          Automated weekly sync of [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) main into this private main.
+
+          **Method:** merge commit (keeps upstream history; local features are preserved automatically).
+
+          **Upstream head at sync time:** \`${SUBJECT}\`
+
+          **CI gate:** this PR must pass the full suite (hash locks, py3.11 + py3.14 tests, frontend, desktop jobs) before merging. Do NOT merge on red: hash-lock failures mean upstream changed dependency pins and the locks need regenerating locally (\`uv pip compile --universal --python-version 3.11 --generate-hashes\`).
+
+          **Conflict policy:** dependency/lock/compose files favor OURS (Python 3.14 stack, pandas&lt;3, mcp&lt;2); application code favors upstream. A conflicted sync fails without pushing.
+
+          _Opened automatically by the Upstream Sync workflow._
+          EOF
+          )" \
+            --base main \
+            --head "$BRANCH"
+
+      - name: No drift — nothing to do
+        if: steps.drift.outputs.up_to_date == 'true'
+        run: echo "Already in sync with upstream; no PR opened."
